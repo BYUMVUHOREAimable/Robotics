@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Incident Log - Parking Management System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/style.css">
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar" id="sidebar">
+            <div class="logo">
+                <i class='bx bx-parking'></i>
+                <span>Parking System</span>
+            </div>
+            <ul class="nav-links">
+                <li>
+                    <a href="/">
+                        <i class='bx bx-home'></i>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="active">
+                    <a href="/incidents">
+                        <i class='bx bx-error'></i>
+                        <span>Incidents</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+
+        <div class="content" id="content">
+            <div class="header">
+                <button id="sidebarCollapse">
+                    <i class='bx bx-menu'></i>
+                </button>
+                <h1>🚨 Incident Log</h1>
+                <div class="header-right">
+                    <span id="current-time"></span>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Recent Incidents</h2>
+                        <button class="btn btn-primary" onclick="refreshIncidents()">
+                            <i class='bx bx-refresh'></i> Refresh
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Plate</th>
+                                        <th>Location</th>
+                                        <th>Reason</th>
+                                        <th>Timestamp</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="incidents-table">
+                                    {% for row in incidents %}
+                                    <tr class="{{ 'table-warning' if 'Unauthorized' in row[2] else 'table-danger' if 'Tampering' in row[2] else '' }}">
+                                        <td>{{ row[0] }}</td>
+                                        <td>{{ row[1] }}</td>
+                                        <td>{{ row[2] }}</td>
+                                        <td>{{ row[3] }}</td>
+                                        <td>
+                                            {% if 'Unauthorized' in row[2] %}
+                                            <span class="badge bg-warning">Unauthorized</span>
+                                            {% elif 'Tampering' in row[2] %}
+                                            <span class="badge bg-danger">Tampering</span>
+                                            {% else %}
+                                            <span class="badge bg-info">Other</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        // Initialize Socket.IO
+        const socket = io();
+
+        // Update current time
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleTimeString();
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // Toggle sidebar
+        const sidebar = document.getElementById('sidebar');
+        const content = document.getElementById('content');
+        const sidebarCollapse = document.getElementById('sidebarCollapse');
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('active');
+            content.classList.toggle('active');
+        }
+
+        sidebarCollapse.addEventListener('click', function(e) {
+            e.preventDefault();
+            toggleSidebar();
+        });
+
+        // Refresh incidents
+        function refreshIncidents() {
+            fetch('/api/incidents')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.getElementById('incidents-table');
+                    tbody.innerHTML = data.incidents.map(incident => `
+                        <tr class="${incident[2].includes('Unauthorized') ? 'table-warning' : 
+                                   incident[2].includes('Tampering') ? 'table-danger' : ''}">
+                            <td>${incident[0]}</td>
+                            <td>${incident[1]}</td>
+                            <td>${incident[2]}</td>
+                            <td>${incident[3]}</td>
+                            <td>
+                                ${incident[2].includes('Unauthorized') ? 
+                                    '<span class="badge bg-warning">Unauthorized</span>' :
+                                    incident[2].includes('Tampering') ?
+                                    '<span class="badge bg-danger">Tampering</span>' :
+                                    '<span class="badge bg-info">Other</span>'
+                                }
+                            </td>
+                        </tr>
+                    `).join('');
+                })
+                .catch(error => console.error('Error refreshing incidents:', error));
+        }
+
+        // Socket.IO event handlers
+        socket.on('new_incident', function(data) {
+            refreshIncidents();
+            showNotification(`New incident: ${data.reason} at ${data.location}`, 'warning');
+        });
+
+        socket.on('buzzer_activated', function(data) {
+            showNotification('Alarm activated!', 'error');
+            playAlertSound();
+        });
+
+        // Show notification
+        function showNotification(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast-notification ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 5000);
+        }
+
+        // Play alert sound
+        function playAlertSound() {
+            const audio = new Audio('/static/alert.mp3');
+            audio.play().catch(error => console.log('Error playing alert sound:', error));
+        }
+
+        // Refresh incidents every 30 seconds
+        setInterval(refreshIncidents, 30000);
+    </script>
+</body>
+</html> 

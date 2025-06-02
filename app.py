@@ -8,13 +8,28 @@ import os
 import math
 from functools import wraps
 import jwt
+import sys
+import random
+from tamper_alert import TamperAlertSystem
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'  # Change this to a secure secret key
 socketio = SocketIO(app)
+alert_system = TamperAlertSystem(socketio)
 
 # Constants
 HOURLY_RATE = 500  # RWF per hour
+GATE_TYPES = {
+    'entry': 'Entry Gate',
+    'exit': 'Exit Gate'
+}
+
+ALERT_TYPES = {
+    'gate_tampering': 'Gate Tampering',
+    'unauthorized_exit': 'Unauthorized Exit',
+    'payment_pending': 'Payment Pending',
+    'system_error': 'System Error'
+}
 
 # User roles
 ROLES = {
@@ -71,12 +86,15 @@ def role_required(required_permissions):
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    print("Login attempt...")
     auth = request.json
     if not auth or not auth.get('username') or not auth.get('password'):
+        print("Missing credentials")
         return jsonify({'message': 'Could not verify!'}), 401
 
     user = USERS.get(auth.get('username'))
     if not user or user['password'] != auth.get('password'):
+        print("Invalid credentials")
         return jsonify({'message': 'Invalid credentials!'}), 401
 
     token = jwt.encode({
@@ -84,6 +102,7 @@ def login():
         'exp': datetime.utcnow() + timedelta(hours=24)
     }, app.config['SECRET_KEY'])
 
+    print(f"Login successful for user: {auth.get('username')}")
     return jsonify({
         'token': token,
         'role': user['role']
@@ -91,50 +110,126 @@ def login():
 
 # Database setup
 def init_db():
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    
-    # Drop existing tables if they exist
-    cursor.execute('DROP TABLE IF EXISTS logs')
-    cursor.execute('DROP TABLE IF EXISTS statistics')
-    cursor.execute('DROP TABLE IF EXISTS alerts')
-    
-    # Create main logs table with all required columns
-    cursor.execute('''CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        plate TEXT,
-        entry_time TEXT,
-        exit_time TEXT,
-        paid INTEGER DEFAULT 0,
-        payment_amount REAL DEFAULT 0,
-        payment_time TEXT,
-        duration_hours REAL DEFAULT 0,
-        status TEXT DEFAULT 'active',
-        gate_location TEXT DEFAULT 'entry'
-    )''')
-    
-    # Create statistics table
-    cursor.execute('''CREATE TABLE IF NOT EXISTS statistics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        total_vehicles INTEGER DEFAULT 0,
-        current_vehicles INTEGER DEFAULT 0,
-        total_revenue REAL DEFAULT 0,
-        last_updated TEXT
-    )''')
-    
-    # Create alerts table
-    cursor.execute('''CREATE TABLE IF NOT EXISTS alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        plate TEXT,
-        alert_type TEXT,
-        timestamp TEXT,
-        gate_location TEXT,
-        description TEXT,
-        resolved INTEGER DEFAULT 0
-    )''')
-    
-    conn.commit()
-    conn.close()
+    """Initialize the database with required tables and sample data"""
+    conn = None
+    try:
+        # Remove existing database file if it exists
+        if os.path.exists('database.db'):
+            os.remove('database.db')
+            print("Removed existing database file")
+        
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        
+        # Create main logs table with all required columns
+        cursor.execute('''CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT,
+            entry_time TEXT,
+            exit_time TEXT,
+            paid INTEGER DEFAULT 0,
+            payment_amount REAL DEFAULT 0,
+            payment_time TEXT,
+            duration_hours REAL DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            gate_location TEXT DEFAULT 'entry'
+        )''')
+        
+        # Create statistics table
+        cursor.execute('''CREATE TABLE IF NOT EXISTS statistics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            total_vehicles INTEGER DEFAULT 0,
+            current_vehicles INTEGER DEFAULT 0,
+            total_revenue REAL DEFAULT 0,
+            last_updated TEXT
+        )''')
+        
+        # Create alerts table
+        cursor.execute('''CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT,
+            alert_type TEXT,
+            timestamp TEXT,
+            gate_location TEXT,
+            description TEXT,
+            resolved INTEGER DEFAULT 0
+        )''')
+        
+        conn.commit()
+        print("Database tables created successfully")
+        
+        # Create sample data
+        sample_plates = ['ABC123', 'XYZ789', 'DEF456', 'GHI789', 'JKL012']
+        current_time = datetime.now()
+        
+        # Insert sample vehicle entries
+        for plate in sample_plates:
+            entry_time = (current_time - timedelta(hours=random.randint(1, 5))).strftime('%Y-%m-%d %H:%M:%S')
+            is_paid = random.choice([True, False])
+            
+            if is_paid:
+                exit_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                duration = random.uniform(1, 5)
+                payment_amount = math.ceil(duration) * HOURLY_RATE
+                status = 'exit'
+            else:
+                exit_time = None
+                duration = 0
+                payment_amount = 0
+                status = 'active'
+            
+            cursor.execute('''
+                INSERT INTO logs 
+                (plate, entry_time, exit_time, paid, payment_amount, duration_hours, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                plate,
+                entry_time,
+                exit_time,
+                is_paid,
+                payment_amount,
+                duration,
+                status
+            ))
+        
+        # Create sample alerts
+        alert_types = ['gate_tampering', 'unauthorized_exit', 'system_error']
+        locations = ['entry', 'exit']
+        
+        for _ in range(3):
+            alert_type = random.choice(alert_types)
+            location = random.choice(locations)
+            plate = random.choice(sample_plates)
+            timestamp = (current_time - timedelta(minutes=random.randint(1, 60))).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT INTO alerts 
+                (plate, alert_type, timestamp, gate_location, description, resolved)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                plate,
+                alert_type,
+                timestamp,
+                location,
+                f'Sample {alert_type} alert at {location} gate',
+                random.choice([0, 1])
+            ))
+        
+        conn.commit()
+        print("Sample data created successfully")
+        
+        # Update statistics
+        update_statistics()
+        
+        print("Database initialization completed successfully")
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+        if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if conn:
+            conn.close()
 
 def get_db_connection():
     conn = sqlite3.connect('database.db')
@@ -159,19 +254,53 @@ def calculate_payment_amount(entry_time, exit_time):
         return HOURLY_RATE  # Return minimum payment if calculation fails
 
 def import_csv_data():
-    if not os.path.exists('plates_log.csv'):
-        return
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
+    """Import data from CSV or create sample data"""
+    conn = None
     try:
-        # Read CSV file
+        if not os.path.exists('plates_log.csv'):
+            print("CSV file not found. Creating sample data...")
+            # Create sample CSV data
+            sample_data = {
+                'Plate Number': [],
+                'Timestamp': [],
+                'Payment Status': [],
+                'Payment Timestamp': []
+            }
+            
+            # Generate sample entries
+            sample_plates = ['ABC123', 'XYZ789', 'DEF456', 'GHI789', 'JKL012']
+            current_time = datetime.now()
+            
+            for plate in sample_plates:
+                entry_time = current_time - timedelta(hours=random.randint(1, 5))
+                is_paid = random.choice([True, False])
+                payment_time = entry_time + timedelta(hours=random.randint(1, 3)) if is_paid else None
+                
+                sample_data['Plate Number'].append(plate)
+                sample_data['Timestamp'].append(entry_time.strftime('%Y-%m-%d %H:%M:%S'))
+                sample_data['Payment Status'].append(1 if is_paid else 0)
+                sample_data['Payment Timestamp'].append(payment_time.strftime('%Y-%m-%d %H:%M:%S') if payment_time else None)
+            
+            # Create DataFrame and save to CSV
+            df = pd.DataFrame(sample_data)
+            df.to_csv('plates_log.csv', index=False)
+            print("Sample CSV data created successfully")
+        
+        # Read and import CSV data
+        print("Reading CSV data...")
         df = pd.read_csv('plates_log.csv')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Clear existing data
+        cursor.execute("DELETE FROM logs")
+        cursor.execute("DELETE FROM statistics")
+        cursor.execute("DELETE FROM alerts")
         
         # Convert timestamp columns to datetime
         df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-        df['Payment Timestamp'] = pd.to_datetime(df['Payment Timestamp'], errors='coerce')  # Handle NaN values
+        df['Payment Timestamp'] = pd.to_datetime(df['Payment Timestamp'], errors='coerce')
         
         # Insert data into database
         for _, row in df.iterrows():
@@ -208,16 +337,110 @@ def import_csv_data():
                 status
             ))
         
-        conn.commit()
+        # Create sample alerts
+        alert_types = ['gate_tampering', 'unauthorized_exit', 'system_error']
+        locations = ['entry', 'exit']
         
-        # Update statistics after import
+        for _ in range(3):
+            alert_type = random.choice(alert_types)
+            location = random.choice(locations)
+            plate = random.choice(sample_plates)
+            timestamp = (current_time - timedelta(minutes=random.randint(1, 60))).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT INTO alerts 
+                (plate, alert_type, timestamp, gate_location, description, resolved)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                plate,
+                alert_type,
+                timestamp,
+                location,
+                f'Sample {alert_type} alert at {location} gate',
+                random.choice([0, 1])
+            ))
+        
+        conn.commit()
+        print("CSV data imported successfully")
+        
+        # Update statistics
         update_statistics()
         
     except Exception as e:
-        print(f"Error importing CSV data: {str(e)}")
-        conn.rollback()
+        print(f"Error importing data: {str(e)}")
+        if conn:
+            conn.rollback()
+        raise e
     finally:
-        conn.close()
+        if conn:
+            conn.close()
+
+def create_sample_data(conn, cursor):
+    """Create sample data for testing"""
+    try:
+        # Create sample vehicle entries
+        sample_plates = ['ABC123', 'XYZ789', 'DEF456', 'GHI789', 'JKL012']
+        current_time = datetime.now()
+        
+        for plate in sample_plates:
+            entry_time = (current_time - timedelta(hours=random.randint(1, 5))).strftime('%Y-%m-%d %H:%M:%S')
+            is_paid = random.choice([True, False])
+            
+            if is_paid:
+                exit_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
+                duration = random.uniform(1, 5)
+                payment_amount = math.ceil(duration) * HOURLY_RATE
+                status = 'exit'
+            else:
+                exit_time = None
+                duration = 0
+                payment_amount = 0
+                status = 'active'
+            
+            cursor.execute('''
+                INSERT INTO logs 
+                (plate, entry_time, exit_time, paid, payment_amount, duration_hours, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                plate,
+                entry_time,
+                exit_time,
+                is_paid,
+                payment_amount,
+                duration,
+                status
+            ))
+        
+        # Create sample alerts
+        alert_types = ['gate_tampering', 'unauthorized_exit', 'system_error']
+        locations = ['entry', 'exit']
+        
+        for _ in range(3):
+            alert_type = random.choice(alert_types)
+            location = random.choice(locations)
+            plate = random.choice(sample_plates)
+            timestamp = (current_time - timedelta(minutes=random.randint(1, 60))).strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT INTO alerts 
+                (plate, alert_type, timestamp, gate_location, description, resolved)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                plate,
+                alert_type,
+                timestamp,
+                location,
+                f'Sample {alert_type} alert at {location} gate',
+                random.choice([0, 1])
+            ))
+        
+        # Update statistics
+        update_statistics()
+        
+        print("Sample data created successfully")
+    except Exception as e:
+        print(f"Error creating sample data: {str(e)}")
+        raise e
 
 def update_statistics():
     conn = get_db_connection()
@@ -297,6 +520,8 @@ def dashboard():
 @token_required
 @role_required(['read'])
 def get_logs(current_user):
+    """Get paginated logs with search"""
+    print("Fetching logs...")
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
     plate_search = request.args.get('plate', '')
@@ -304,72 +529,85 @@ def get_logs(current_user):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Base query
-    query = "SELECT * FROM logs"
-    count_query = "SELECT COUNT(*) FROM logs"
-    params = []
-    
-    # Add search condition if plate number is provided
-    if plate_search:
-        query += " WHERE plate LIKE ?"
-        count_query += " WHERE plate LIKE ?"
-        params.append(f'%{plate_search}%')
-    
-    # Add pagination
-    query += " ORDER BY entry_time DESC LIMIT ? OFFSET ?"
-    params.extend([per_page, (page - 1) * per_page])
-    
-    # Get total count
-    cursor.execute(count_query, params[:-2] if plate_search else [])
-    total_count = cursor.fetchone()[0]
-    
-    # Get paginated results
-    cursor.execute(query, params)
-    logs = [dict(row) for row in cursor.fetchall()]
-    
-    conn.close()
-    
-    return jsonify({
-        'logs': logs,
-        'pagination': {
-            'total': total_count,
-            'pages': math.ceil(total_count / per_page),
-            'current_page': page,
-            'per_page': per_page
-        }
-    })
+    try:
+        # Base query
+        query = "SELECT * FROM logs"
+        count_query = "SELECT COUNT(*) FROM logs"
+        params = []
+        
+        # Add search condition if plate number is provided
+        if plate_search:
+            query += " WHERE plate LIKE ?"
+            count_query += " WHERE plate LIKE ?"
+            params.append(f'%{plate_search}%')
+        
+        # Add pagination
+        query += " ORDER BY entry_time DESC LIMIT ? OFFSET ?"
+        params.extend([per_page, (page - 1) * per_page])
+        
+        # Get total count
+        cursor.execute(count_query, params[:-2] if plate_search else [])
+        total_count = cursor.fetchone()[0]
+        
+        # Get paginated results
+        cursor.execute(query, params)
+        logs = [dict(row) for row in cursor.fetchall()]
+        
+        print(f"Retrieved {len(logs)} logs")
+        return jsonify({
+            'logs': logs,
+            'pagination': {
+                'total': total_count,
+                'pages': math.ceil(total_count / per_page),
+                'current_page': page,
+                'per_page': per_page
+            }
+        })
+    except Exception as e:
+        print(f"Error fetching logs: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/stats')
 def get_stats():
+    """Get current statistics"""
+    print("Fetching stats...")
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Get latest statistics
-    cursor.execute("""
-        SELECT * FROM statistics 
-        ORDER BY last_updated DESC 
-        LIMIT 1
-    """)
-    stats = cursor.fetchone()
-    
-    if not stats:
-        # If no statistics exist, calculate them
-        update_statistics()
+    try:
+        # Get latest statistics
         cursor.execute("""
             SELECT * FROM statistics 
             ORDER BY last_updated DESC 
             LIMIT 1
         """)
         stats = cursor.fetchone()
-    
-    conn.close()
-    
-    return jsonify({
-        'total_vehicles': stats['total_vehicles'],
-        'current_vehicles': stats['current_vehicles'],
-        'total_revenue': stats['total_revenue'],
-        'last_updated': stats['last_updated']
-    })
+        
+        if not stats:
+            print("No stats found, calculating new stats...")
+            # If no statistics exist, calculate them
+            update_statistics()
+            cursor.execute("""
+                SELECT * FROM statistics 
+                ORDER BY last_updated DESC 
+                LIMIT 1
+            """)
+            stats = cursor.fetchone()
+        
+        print(f"Stats retrieved: {dict(stats)}")
+        return jsonify({
+            'total_vehicles': stats['total_vehicles'],
+            'current_vehicles': stats['current_vehicles'],
+            'total_revenue': stats['total_revenue'],
+            'last_updated': stats['last_updated']
+        })
+    except Exception as e:
+        print(f"Error fetching stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/register_vehicle', methods=['POST'])
 def register_vehicle():
@@ -389,6 +627,13 @@ def register_vehicle():
         existing = cursor.fetchone()
         
         if existing:
+            # Log alert for duplicate entry attempt
+            log_alert(
+                plate,
+                'system_error',
+                'entry',
+                f'Duplicate entry attempt for vehicle {plate}'
+            )
             return jsonify({
                 'status': 'error',
                 'message': 'Vehicle is already registered and active'
@@ -426,188 +671,147 @@ def register_vehicle():
 def process_exit():
     data = request.json
     plate = data.get('plate')
-    exit_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    if not plate:
+        return jsonify({'status': 'error', 'message': 'Plate number is required'}), 400
     
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Check if vehicle exists and has paid
+    cursor.execute('''
+        SELECT id, entry_time, payment_amount, paid FROM logs 
+        WHERE plate = ? AND status = 'active'
+    ''', (plate,))
+    
+    vehicle = cursor.fetchone()
+    
+    if not vehicle:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No active vehicle found with this plate number'}), 404
+    
     try:
-        # Get entry time for the vehicle
-        cursor.execute("""
-            SELECT entry_time, paid, payment_time 
-            FROM logs 
-            WHERE plate = ? AND status = 'active'
-        """, (plate,))
-        result = cursor.fetchone()
-        
-        if result:
-            entry_time = result['entry_time']
-            is_paid = result['paid']
-            payment_time = result['payment_time']
-            
-            # Check for unauthorized exit
-            if not is_paid:
-                log_alert(
-                    plate,
-                    'unauthorized_exit',
-                    'exit',
-                    f'Vehicle attempted to exit without payment. Entry time: {entry_time}'
-                )
-            
-            # Calculate payment amount and duration
-            payment_amount = calculate_payment_amount(entry_time, exit_time)
-            entry_dt = datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
-            exit_dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S')
-            duration = max(0, (exit_dt - entry_dt).total_seconds() / 3600)
-            
-            # Update the log with exit time and payment information
-            cursor.execute(
-                """UPDATE logs 
-                   SET exit_time = ?, 
-                       status = 'exit',
-                       payment_amount = ?,
-                       duration_hours = ?,
-                       payment_time = CASE 
-                           WHEN paid = 0 THEN ?
-                           ELSE payment_time 
-                       END,
-                       paid = CASE 
-                           WHEN paid = 0 THEN 1 
-                           ELSE paid 
-                       END,
-                       gate_location = 'exit'
-                   WHERE plate = ? AND status = 'active'""",
-                (exit_time, payment_amount, duration, exit_time, plate)
-            )
-            conn.commit()
-            
-            # Update CSV with exit time
-            update_csv_exit_time(plate, exit_time)
-            
-            # Update statistics
-            update_statistics()
-            
-            # Emit socket event with all relevant information
-            socketio.emit('vehicle_exit', {
-                'plate': plate,
-                'entry_time': entry_time,
-                'exit_time': exit_time,
-                'payment_time': payment_time,
-                'payment_amount': payment_amount,
-                'duration_hours': duration,
-                'was_paid': is_paid
-            })
-            
+        # Check if payment is pending
+        if not vehicle['paid']:
+            # Log unauthorized exit attempt
+            alert_system.log_unauthorized_exit(plate)
             return jsonify({
-                'status': 'success',
-                'entry_time': entry_time,
-                'exit_time': exit_time,
-                'payment_time': payment_time,
-                'payment_amount': payment_amount,
-                'duration_hours': duration,
-                'was_paid': is_paid
-            })
+                'status': 'error',
+                'message': 'Payment pending. Cannot process exit.'
+            }), 403
         
-        return jsonify({'status': 'error', 'message': 'Vehicle not found or already exited'})
+        # Update exit time and status
+        current_time = datetime.now()
+        entry_time = datetime.strptime(vehicle['entry_time'], '%Y-%m-%d %H:%M:%S')
+        duration = (current_time - entry_time).total_seconds() / 3600
+        
+        cursor.execute('''
+            UPDATE logs 
+            SET exit_time = ?, status = 'exit', duration_hours = ?
+            WHERE id = ?
+        ''', (current_time.strftime('%Y-%m-%d %H:%M:%S'), duration, vehicle['id']))
+        
+        conn.commit()
+        
+        # Update CSV with exit time
+        update_csv_exit_time(plate, current_time.strftime('%Y-%m-%d %H:%M:%S'))
+        
+        # Emit socket event for real-time update
+        socketio.emit('vehicle_exit', {
+            'plate': plate,
+            'duration_hours': duration,
+            'payment_amount': vehicle['payment_amount']
+        })
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Exit processed successfully',
+            'duration_hours': duration,
+            'payment_amount': vehicle['payment_amount']
+        })
     except Exception as e:
-        print(f"Error processing exit: {str(e)}")
-        return jsonify({'status': 'error', 'message': 'Error processing exit'})
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         conn.close()
 
 @app.route('/api/process_payment', methods=['POST'])
 def process_payment():
-    data = request.json
+    data = request.get_json()
     plate = data.get('plate')
-    payment_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    if not plate:
+        return jsonify({'status': 'error', 'message': 'Plate number is required'}), 400
     
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Check if vehicle exists and hasn't paid
+    cursor.execute('''
+        SELECT id, entry_time FROM logs 
+        WHERE plate = ? AND paid = 0 AND status = 'active'
+    ''', (plate,))
+    
+    vehicle = cursor.fetchone()
+    
+    if not vehicle:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No active vehicle found with this plate number'}), 404
+    
+    # Calculate payment amount
+    entry_time = datetime.strptime(vehicle['entry_time'], '%Y-%m-%d %H:%M:%S')
+    current_time = datetime.now()
+    duration = (current_time - entry_time).total_seconds() / 3600  # Convert to hours
+    payment_amount = calculate_payment_amount(entry_time, current_time.strftime('%Y-%m-%d %H:%M:%S'))
+    
     try:
-        # Get vehicle details
-        cursor.execute("""
-            SELECT entry_time, exit_time, payment_amount, status
-            FROM logs 
-            WHERE plate = ? AND status = 'active'
-        """, (plate,))
-        result = cursor.fetchone()
+        # Update payment status
+        cursor.execute('''
+            UPDATE logs 
+            SET paid = 1, payment_amount = ?, payment_time = ?
+            WHERE id = ?
+        ''', (payment_amount, current_time.strftime('%Y-%m-%d %H:%M:%S'), vehicle['id']))
         
-        if result:
-            # Calculate payment amount if not already set
-            if not result['payment_amount']:
-                payment_amount = calculate_payment_amount(
-                    result['entry_time'],
-                    result['exit_time'] if result['exit_time'] else payment_time
-                )
-            else:
-                payment_amount = result['payment_amount']
-            
-            # Ensure payment amount is positive
-            payment_amount = max(HOURLY_RATE, payment_amount)
-            
-            # Update the log with payment information
-            cursor.execute(
-                """UPDATE logs 
-                   SET paid = 1, 
-                       payment_time = ?,
-                       payment_amount = ?,
-                       status = 'active'  -- Keep status as active after payment
-                   WHERE plate = ? AND status = 'active'""",
-                (payment_time, payment_amount, plate)
-            )
-            conn.commit()
-            
-            # Get updated record
-            cursor.execute("""
-                SELECT * FROM logs 
-                WHERE plate = ? 
-                ORDER BY id DESC 
-                LIMIT 1
-            """, (plate,))
-            updated_record = cursor.fetchone()
-            
-            # Update statistics
-            update_statistics()
-            
-            # Emit socket event with complete information
-            socketio.emit('payment_processed', {
-                'plate': plate,
-                'amount': payment_amount,
-                'payment_time': payment_time,
-                'status': 'active',  # Always active after payment
-                'paid': True
-            })
-            
-            return jsonify({
-                'status': 'success',
-                'payment_amount': payment_amount,
-                'payment_time': payment_time,
-                'record_status': 'active'  # Always active after payment
-            })
+        conn.commit()
         
-        return jsonify({'status': 'error', 'message': 'Vehicle not found or already paid'})
+        # Emit socket event for real-time update
+        socketio.emit('payment_processed', {
+            'plate': plate,
+            'amount': payment_amount
+        })
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Payment processed successfully',
+            'payment_amount': payment_amount
+        })
     except Exception as e:
-        print(f"Error processing payment: {str(e)}")
-        return jsonify({'status': 'error', 'message': 'Error processing payment'})
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         conn.close()
 
 @app.route('/api/alerts')
 def get_alerts():
     """Get recent alerts"""
+    print("Fetching alerts...")
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute("""
-        SELECT * FROM alerts 
-        ORDER BY timestamp DESC 
-        LIMIT 100
-    """)
-    alerts = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    
-    return jsonify(alerts)
+    try:
+        cursor.execute("""
+            SELECT * FROM alerts 
+            ORDER BY timestamp DESC 
+            LIMIT 100
+        """)
+        alerts = [dict(row) for row in cursor.fetchall()]
+        print(f"Retrieved {len(alerts)} alerts")
+        return jsonify(alerts)
+    except Exception as e:
+        print(f"Error fetching alerts: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/resolve_alert', methods=['POST'])
 def resolve_alert():
@@ -785,8 +989,145 @@ def delete_csv_record(plate):
     except Exception as e:
         print(f"Error deleting from CSV: {str(e)}")
 
+@app.route('/api/quit', methods=['POST'])
+@token_required
+def quit_application():
+    try:
+        # Clean up any resources
+        conn = get_db_connection()
+        conn.close()
+        
+        # Schedule the application shutdown
+        func = request.environ.get('werkzeug.server.shutdown')
+        if func is None:
+            raise RuntimeError('Not running with the Werkzeug Server')
+        func()
+        
+        return jsonify({'status': 'success', 'message': 'Application shutting down'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/detect_gate_tampering', methods=['POST'])
+@token_required
+@role_required(['write'])
+def detect_gate_tampering(current_user):
+    """Handle gate tampering detection"""
+    data = request.json
+    gate_location = data.get('gate_location')
+    plate = data.get('plate', 'Unknown')
+    
+    if not gate_location or gate_location not in GATE_TYPES:
+        return jsonify({'status': 'error', 'message': 'Invalid gate location'}), 400
+    
+    # Log the tampering alert
+    alert_system.log_incident(plate, gate_location, "Manual Gate Tampering")
+    alert_system.activate_buzzer()
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Gate tampering alert logged'
+    })
+
+@app.route('/api/check_unauthorized_exit', methods=['POST'])
+def check_unauthorized_exit():
+    """Endpoint to check for unauthorized exit attempts"""
+    data = request.json
+    plate = data.get('plate')
+    
+    if not plate:
+        return jsonify({'status': 'error', 'message': 'Plate number is required'}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Check if vehicle exists and has pending payment
+        cursor.execute('''
+            SELECT id, paid FROM logs 
+            WHERE plate = ? AND status = 'active'
+        ''', (plate,))
+        
+        vehicle = cursor.fetchone()
+        
+        if vehicle and not vehicle['paid']:
+            # Log unauthorized exit attempt
+            log_alert(
+                plate,
+                'unauthorized_exit',
+                'exit',
+                f'Unauthorized exit detected for vehicle {plate} - Payment pending'
+            )
+            
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized exit detected - Payment pending'
+            }), 403
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'No unauthorized exit detected'
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/incidents')
+@token_required
+@role_required(['read'])
+def incidents(current_user):
+    """View incident log page"""
+    return render_template("incidents.html", incidents=alert_system.get_incidents())
+
+@app.route('/api/incidents')
+@token_required
+@role_required(['read'])
+def get_incidents(current_user):
+    """Get recent incidents"""
+    return jsonify({
+        'incidents': alert_system.get_incidents()
+    })
+
+# Add this to your existing socket.io event handlers
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+@socketio.on('gate_tampering_detected')
+def handle_gate_tampering(data):
+    """Handle gate tampering detection from client"""
+    gate_location = data.get('gate_location')
+    plate = data.get('plate', 'Unknown')
+    
+    if gate_location in GATE_TYPES:
+        log_alert(
+            plate,
+            'gate_tampering',
+            gate_location,
+            f'Gate tampering detected at {GATE_TYPES[gate_location]}'
+        )
+
 if __name__ == '__main__':
-    init_db()
-    import_csv_data()  # Import existing data from CSV
-    update_statistics()  # Initialize statistics
-    socketio.run(app, debug=True)
+    try:
+        # Initialize database
+        print("Initializing database...")
+        init_db()
+        
+        # Start the alert system
+        print("Starting alert system...")
+        alert_system.start_monitoring()
+        
+        # Start the application
+        print("Starting Flask application...")
+        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    except Exception as e:
+        print(f"Error starting application: {str(e)}")
+        sys.exit(1)
+    finally:
+        print("Shutting down application...")
+        alert_system.stop_monitoring()
+        sys.exit(0)
