@@ -68,11 +68,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Format currency
     function formatCurrency(amount) {
-        return `RWF ${amount.toLocaleString()}`;
+        return `RWF ${parseFloat(amount).toLocaleString()}`;
     }
 
     // Format date
     function formatDate(dateString) {
+        if (!dateString) return '-';
         const date = new Date(dateString);
         return date.toLocaleString();
     }
@@ -102,152 +103,209 @@ document.addEventListener('DOMContentLoaded', function() {
             '<span class="badge bg-danger">Active</span>';
     }
 
-    // Update stats
-    function updateStats() {
-        fetch('/api/stats')
-            .then(response => response.json())
+    // Modified login function to return a promise
+    function login(username, password) {
+        console.log('Attempting login...');
+        return new Promise((resolve, reject) => {
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: username,
+                    password: password
+                })
+            })
+            .then(response => {
+                console.log('Login response status:', response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
-                document.getElementById('total-vehicles').textContent = data.total_vehicles;
-                document.getElementById('current-vehicles').textContent = data.current_vehicles;
-                document.getElementById('total-revenue').textContent = formatCurrency(data.total_revenue);
+                console.log('Login response:', data);
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                    resolve(data);
+                } else {
+                    reject(new Error('Login failed - no token received'));
+                }
             })
-            .catch(error => console.error('Error fetching stats:', error));
+            .catch(error => {
+                console.error('Login error:', error);
+                showNotification('Login failed: ' + error.message, 'error');
+                reject(error);
+            });
+        });
     }
 
-    // Update alerts
-    function updateAlerts() {
-        fetch('/api/alerts')
-            .then(response => response.json())
-            .then(alerts => {
-                const tbody = document.getElementById('alerts-table');
-                tbody.innerHTML = alerts.map(alert => `
-                    <tr class="${alert.resolved ? '' : 'table-warning'}">
-                        <td>${formatDate(alert.timestamp)}</td>
-                        <td>${alert.plate}</td>
-                        <td>${alert.alert_type}</td>
-                        <td>${alert.gate_location}</td>
-                        <td>${alert.description}</td>
-                        <td>${getAlertBadge(alert.resolved)}</td>
-                        <td>
-                            ${!alert.resolved ? 
-                                `<button class="btn btn-sm btn-success resolve-alert" data-id="${alert.id}">
-                                    Resolve
-                                </button>` : 
-                                ''
-                            }
-                        </td>
-                    </tr>
-                `).join('');
-
-                // Add event listeners to resolve buttons
-                document.querySelectorAll('.resolve-alert').forEach(button => {
-                    button.addEventListener('click', function() {
-                        const alertId = this.dataset.id;
-                        resolveAlert(alertId);
-                    });
+    // Modified updateStats function to return a promise
+    function updateStats() {
+        console.log('Updating stats...');
+        return new Promise((resolve, reject) => {
+            fetch('/api/stats')
+                .then(response => {
+                    console.log('Stats response status:', response.status);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Stats data:', data);
+                    document.getElementById('total-vehicles').textContent = data.total_vehicles || 0;
+                    document.getElementById('current-vehicles').textContent = data.current_vehicles || 0;
+                    document.getElementById('total-revenue').textContent = formatCurrency(data.total_revenue || 0);
+                    resolve(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching stats:', error);
+                    showNotification('Error loading statistics: ' + error.message, 'error');
+                    reject(error);
                 });
-
-                // Update active alerts count
-                const activeAlerts = alerts.filter(alert => !alert.resolved).length;
-                document.getElementById('active-alerts').textContent = activeAlerts;
-            })
-            .catch(error => console.error('Error fetching alerts:', error));
+        });
     }
 
-    // Resolve alert
-    function resolveAlert(alertId) {
-        fetch('/api/resolve_alert', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                alert_id: alertId
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                updateAlerts();
-                showNotification('Alert resolved successfully');
-            } else {
-                showNotification(`Error: ${data.message}`, 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error resolving alert:', error);
-            showNotification('Error resolving alert', 'error');
+    // Modified updateAlerts function to return a promise
+    function updateAlerts() {
+        console.log('Updating alerts...');
+        return new Promise((resolve, reject) => {
+            fetch('/api/alerts')
+                .then(response => {
+                    console.log('Alerts response status:', response.status);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(alerts => {
+                    console.log('Alerts data:', alerts);
+                    const tbody = document.getElementById('alerts-table');
+                    if (!tbody) {
+                        throw new Error('Alerts table not found');
+                    }
+
+                    tbody.innerHTML = alerts.map(alert => `
+                        <tr class="${alert.resolved ? 'table-success' : 'table-danger'}">
+                            <td>${alert.plate || 'N/A'}</td>
+                            <td>${alert.alert_type}</td>
+                            <td>${alert.gate_location}</td>
+                            <td>${alert.description}</td>
+                            <td>${alert.timestamp}</td>
+                            <td>
+                                <span class="badge ${alert.resolved ? 'bg-success' : 'bg-danger'}">
+                                    ${alert.resolved ? 'Resolved' : 'Active'}
+                                </span>
+                            </td>
+                        </tr>
+                    `).join('');
+
+                    // Update active alerts count
+                    const activeAlerts = alerts.filter(alert => !alert.resolved).length;
+                    document.getElementById('active-alerts').textContent = activeAlerts;
+                    
+                    resolve(alerts);
+                })
+                .catch(error => {
+                    console.error('Error fetching alerts:', error);
+                    showNotification('Error loading alerts: ' + error.message, 'error');
+                    reject(error);
+                });
         });
     }
 
     // Update activity table with pagination and search
     function updateActivityTable() {
-        const token = localStorage.getItem('token');
-        if (!token) {
-            login('admin', 'admin123');
-            return;
-        }
-
-        const url = new URL('/api/logs', window.location.origin);
-        url.searchParams.set('page', currentPage);
-        url.searchParams.set('per_page', perPage);
-        if (searchQuery) {
-            url.searchParams.set('plate', searchQuery);
-        }
-
-        fetch(url, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        })
-        .then(response => {
-            if (response.status === 401) {
-                login('admin', 'admin123');
+        console.log('Updating activity table...');
+        return new Promise((resolve, reject) => {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                console.error('No token found');
+                reject(new Error('No token found'));
                 return;
             }
-            return response.json();
-        })
-        .then(data => {
-            if (!data) return;
-            
-            const tbody = document.getElementById('activity-table');
-            tbody.innerHTML = data.logs.map(log => `
-                <tr>
-                    <td>${log.id}</td>
-                    <td>${log.plate}</td>
-                    <td>${formatDate(log.entry_time)}</td>
-                    <td>${log.exit_time ? formatDate(log.exit_time) : '-'}</td>
-                    <td>${formatDuration(log.duration_hours)}</td>
-                    <td>${getStatusBadge(log.status)}</td>
-                    <td>
-                        ${log.paid ? 
-                            `<span class="text-success">✅ Paid (${formatCurrency(log.payment_amount)})</span>` : 
-                            log.status === 'active' ?
-                                `<button class="btn btn-sm btn-primary process-payment" data-plate="${log.plate}">Process Payment</button>` :
-                                `<button class="btn btn-sm btn-success process-exit" data-plate="${log.plate}">Process Exit</button>`
-                        }
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-info edit-record" data-id="${log.id}">
-                            <i class='bx bx-edit'></i> Edit
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
 
-            // Update pagination info
-            totalPages = data.pagination.pages;
-            document.getElementById('currentPageStart').textContent = ((currentPage - 1) * perPage) + 1;
-            document.getElementById('currentPageEnd').textContent = Math.min(currentPage * perPage, data.pagination.total);
-            document.getElementById('totalRecords').textContent = data.pagination.total;
+            const url = new URL('/api/logs', window.location.origin);
+            url.searchParams.set('page', currentPage);
+            url.searchParams.set('per_page', perPage);
+            if (searchQuery) {
+                url.searchParams.set('plate', searchQuery);
+            }
 
-            // Update pagination controls
-            updatePagination();
+            console.log('Fetching logs from:', url.toString());
 
-            // Add event listeners
-            addTableEventListeners();
-        })
-        .catch(error => console.error('Error fetching logs:', error));
+            fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                console.log('Logs response status:', response.status);
+                if (response.status === 401) {
+                    throw new Error('Unauthorized');
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Logs data:', data);
+                if (!data) {
+                    throw new Error('No data received');
+                }
+                
+                const tbody = document.getElementById('activity-table');
+                if (!tbody) {
+                    throw new Error('Activity table not found');
+                }
+
+                tbody.innerHTML = data.logs.map(log => `
+                    <tr>
+                        <td>${log.id}</td>
+                        <td>${log.plate}</td>
+                        <td>${formatDate(log.entry_time)}</td>
+                        <td>${formatDate(log.exit_time)}</td>
+                        <td>${formatDuration(log.duration_hours)}</td>
+                        <td>${getStatusBadge(log.status)}</td>
+                        <td>
+                            ${log.paid ? 
+                                `<span class="text-success">✅ Paid (${formatCurrency(log.payment_amount)})</span>` : 
+                                log.status === 'active' ?
+                                    `<button class="btn btn-sm btn-primary process-payment" data-plate="${log.plate}">Process Payment</button>` :
+                                    `<button class="btn btn-sm btn-success process-exit" data-plate="${log.plate}">Process Exit</button>`
+                            }
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-info edit-record" data-id="${log.id}">
+                                <i class='bx bx-edit'></i> Edit
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+
+                // Update pagination info
+                totalPages = data.pagination.pages;
+                document.getElementById('currentPageStart').textContent = ((currentPage - 1) * perPage) + 1;
+                document.getElementById('currentPageEnd').textContent = Math.min(currentPage * perPage, data.pagination.total);
+                document.getElementById('totalRecords').textContent = data.pagination.total;
+
+                // Update pagination controls
+                updatePagination();
+
+                // Add event listeners
+                addTableEventListeners();
+                
+                resolve(data);
+            })
+            .catch(error => {
+                console.error('Error fetching logs:', error);
+                showNotification('Error loading activity data: ' + error.message, 'error');
+                reject(error);
+            });
+        });
     }
 
     // Update pagination controls
@@ -334,28 +392,30 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Login function
     function login(username, password) {
-        fetch('/api/login', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                username: username,
-                password: password
+        return new Promise((resolve, reject) => {
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: username,
+                    password: password
+                })
             })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.token) {
-                localStorage.setItem('token', data.token);
-                updateActivityTable();
-            } else {
-                showNotification('Login failed', 'error');
-            }
-        })
-        .catch(error => {
-            console.error('Error logging in:', error);
-            showNotification('Login failed', 'error');
+            .then(response => response.json())
+            .then(data => {
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                    resolve(data);
+                } else {
+                    reject(new Error('Login failed'));
+                }
+            })
+            .catch(error => {
+                console.error('Error logging in:', error);
+                reject(error);
+            });
         });
     }
 
@@ -390,7 +450,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function processExit(plate) {
         const token = localStorage.getItem('token');
-        fetch('/api/process_exit', {
+        
+        // First check for unauthorized exit
+        fetch('/api/check_unauthorized_exit', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -402,6 +464,27 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(response => response.json())
         .then(data => {
+            if (data.status === 'error') {
+                showNotification(data.message, 'error');
+                return;
+            }
+            
+            // If no unauthorized exit, process the exit
+            return fetch('/api/process_exit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    plate: plate
+                })
+            });
+        })
+        .then(response => response ? response.json() : null)
+        .then(data => {
+            if (!data) return;
+            
             if (data.status === 'success') {
                 updateStats();
                 updateActivityTable();
@@ -507,8 +590,25 @@ document.addEventListener('DOMContentLoaded', function() {
         updateAlerts();
     });
 
+    socket.on('gate_tampering', function(data) {
+        updateAlerts();
+        showNotification(`Gate tampering detected at ${data.gate_location}`, 'warning');
+        
+        // Play alert sound
+        playAlertSound();
+    });
+
+    socket.on('unauthorized_exit', function(data) {
+        updateAlerts();
+        showNotification(`Unauthorized exit detected for vehicle ${data.plate}`, 'error');
+        
+        // Play alert sound
+        playAlertSound();
+    });
+
     // Show notification
     function showNotification(message, type = 'info') {
+        // Show browser notification if available
         if ('Notification' in window) {
             if (Notification.permission === 'granted') {
                 new Notification('Parking System', {
@@ -533,23 +633,165 @@ document.addEventListener('DOMContentLoaded', function() {
         toast.textContent = message;
         document.body.appendChild(toast);
         
+        // Add different styles for different alert types
+        switch(type) {
+            case 'error':
+                toast.style.backgroundColor = '#dc3545';
+                break;
+            case 'warning':
+                toast.style.backgroundColor = '#ffc107';
+                break;
+            case 'success':
+                toast.style.backgroundColor = '#28a745';
+                break;
+            default:
+                toast.style.backgroundColor = '#17a2b8';
+        }
+        
         setTimeout(() => {
             toast.remove();
-        }, 3000);
+        }, 5000);
     }
 
     // Add refresh button event listener
     document.getElementById('refresh-alerts').addEventListener('click', updateAlerts);
 
-    // Initial data load
-    updateStats();
-    updateActivityTable();
-    updateAlerts();
+    // Initialize the dashboard
+    function initializeDashboard() {
+        console.log('Initializing dashboard...');
+        // First login
+        login('admin', 'admin123')
+            .then(() => {
+                console.log('Login successful, loading data...');
+                // After successful login, load all data
+                return Promise.all([
+                    updateStats(),
+                    updateActivityTable(),
+                    updateAlerts()
+                ]);
+            })
+            .then(() => {
+                console.log('Initial data load complete');
+                // Start periodic updates
+                setInterval(() => {
+                    Promise.all([
+                        updateStats().catch(error => console.error('Error updating stats:', error)),
+                        updateActivityTable().catch(error => console.error('Error updating activity:', error)),
+                        updateAlerts().catch(error => console.error('Error updating alerts:', error))
+                    ]).catch(error => {
+                        console.error('Error during periodic update:', error);
+                    });
+                }, 10000);
+            })
+            .catch(error => {
+                console.error('Error during initialization:', error);
+                showNotification('Error loading dashboard data: ' + error.message, 'error');
+            });
+    }
 
-    // Refresh data every 10 seconds
-    setInterval(() => {
-        updateStats();
-        updateActivityTable();
-        updateAlerts();
-    }, 10000);
+    // Start the initialization
+    initializeDashboard();
+
+    // Add function to simulate gate tampering detection (for testing)
+    function simulateGateTampering(gateLocation) {
+        fetch('/api/detect_gate_tampering', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            },
+            body: JSON.stringify({
+                gate_location: gateLocation,
+                plate: 'Unknown'
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('Gate tampering alert logged', 'info');
+            } else {
+                showNotification(`Error: ${data.message}`, 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error logging gate tampering:', error);
+            showNotification('Error logging gate tampering', 'error');
+        });
+    }
+
+    // Alert handling functions
+    function refreshAlerts() {
+        fetch('/api/alerts')
+            .then(response => response.json())
+            .then(alerts => {
+                const tbody = document.getElementById('alerts-table');
+                tbody.innerHTML = alerts.map(alert => `
+                    <tr class="${alert.resolved ? 'table-success' : 'table-danger'}">
+                        <td>${alert.plate || 'N/A'}</td>
+                        <td>${alert.alert_type}</td>
+                        <td>${alert.gate_location}</td>
+                        <td>${alert.description}</td>
+                        <td>${alert.timestamp}</td>
+                        <td>
+                            <span class="badge ${alert.resolved ? 'bg-success' : 'bg-danger'}">
+                                ${alert.resolved ? 'Resolved' : 'Active'}
+                            </span>
+                        </td>
+                    </tr>
+                `).join('');
+            })
+            .catch(error => console.error('Error refreshing alerts:', error));
+    }
+
+    // Socket.IO event handlers for alerts
+    socket.on('new_alert', function(data) {
+        refreshAlerts();
+        showNotification(`New alert: ${data.description}`, 'error');
+        playAlertSound();
+    });
+
+    socket.on('alert_resolved', function(data) {
+        refreshAlerts();
+        showNotification('Alert resolved', 'success');
+    });
+
+    // Refresh alerts every 30 seconds
+    setInterval(refreshAlerts, 30000);
+
+    // Initial load of alerts
+    refreshAlerts();
+
+    // Add alert sound function
+    function playAlertSound() {
+        const audio = new Audio('/static/alert.mp3');
+        audio.play().catch(error => console.log('Error playing alert sound:', error));
+    }
+
+    // Add quit functionality
+    document.addEventListener('keydown', function(e) {
+        if (e.key.toLowerCase() === 'q') {
+            if (confirm('Are you sure you want to quit the application?')) {
+                const token = localStorage.getItem('token');
+                fetch('/api/quit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        window.close();
+                    } else {
+                        showNotification('Error quitting application', 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error quitting:', error);
+                    showNotification('Error quitting application', 'error');
+                });
+            }
+        }
+    });
 }); 
