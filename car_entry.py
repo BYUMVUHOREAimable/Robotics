@@ -7,8 +7,8 @@ import serial.tools.list_ports
 import csv
 from collections import Counter
 import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r'C:\Users\Nicaise\AppData\Local\Programs\Tesseract-OCR'
-model = YOLO(r'C:\Users\Nicaise\Downloads\parking-management-system-Updated\parking-management-system\parking-management-system\best.pt')
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+model = YOLO(r'best.pt')
 save_dir = 'plates'
 os.makedirs(save_dir, exist_ok=True)
 csv_file = 'plates_log.csv'
@@ -19,7 +19,7 @@ if not os.path.exists(csv_file):
 def detect_arduino_port():
     ports = list(serial.tools.list_ports.comports())
     for port in ports:
-        if "Arduino" in port.description or "COM5" in port.description or "USB-SERIAL" in port.description:
+        if "Arduino" in port.description or "COM11" in port.description or "USB-SERIAL" in port.description:
             return port.device
     return None
 arduino_port = detect_arduino_port()
@@ -32,7 +32,7 @@ else:
     arduino = None
 import random
 def mock_ultrasonic_distance():
-    return random.choice([random.randint(10, 40)] + [random.randint(60, 150)] * 10)
+    return random.choice([random.randint(10, 40)])
 cap = cv2.VideoCapture(0)
 plate_buffer = []
 entry_cooldown = 300
